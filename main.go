@@ -72,15 +72,7 @@ func parseMessage(data []byte) []*Packet {
 	return output
 }
 
-func udpListener(destinations []Destination) {
-	addr, _ := net.ResolveUDPAddr("udp", *address)
-	log.Printf("listening on %s", addr)
-	listener, err := net.ListenUDP("udp", addr)
-	if err != nil {
-		log.Fatalf("ERROR: ListenUDP - %s", err)
-	}
-	defer listener.Close()
-
+func processData(dataCh chan []byte, destinations []Destination) {
 	var destConns []net.Conn
 	for _, destination := range destinations {
 		conn, err := net.DialTimeout("udp", destination.Address, time.Second)
@@ -90,16 +82,8 @@ func udpListener(destinations []Destination) {
 		destConns = append(destConns, conn)
 	}
 
-	message := make([]byte, 512)
-	for {
-		n, remaddr, err := listener.ReadFromUDP(message)
-		if err != nil {
-			log.Printf("ERROR: reading UDP packet from %+v - %s", remaddr, err)
-			continue
-		}
-
-		log.Printf("message: %s (%d)", message[:n], n)
-		for _, p := range parseMessage(message[:n]) {
+	for data := range dataCh {
+		for _, p := range parseMessage(data) {
 			for i, destination := range destinations {
 				key := destination.Regex.ReplaceAll(p.Key, destination.Replace)
 				packet := fmt.Sprintf("%s:%s", key, p.Body)
@@ -118,6 +102,33 @@ func udpListener(destinations []Destination) {
 				}
 			}
 		}
+	}
+}
+
+func udpListener(dataCh chan []byte) {
+	addr, _ := net.ResolveUDPAddr("udp", *address)
+	log.Printf("listening on %s", addr)
+	listener, err := net.ListenUDP("udp", addr)
+	if err != nil {
+		log.Fatalf("ERROR: ListenUDP - %s", err)
+	}
+	defer listener.Close()
+
+	err = listener.SetReadBuffer(1024 * 1024)
+	if err != nil {
+		log.Printf("ERROR: SetReadBuffer - %s", err)
+	}
+
+	for {
+		message := make([]byte, 512)
+		n, remaddr, err := listener.ReadFromUDP(message)
+		if err != nil {
+			log.Printf("ERROR: reading UDP packet from %+v - %s", remaddr, err)
+			continue
+		}
+
+		log.Printf("msg: %s (%d)", message[:n], n)
+		dataCh <- message[:n]
 	}
 }
 
@@ -146,5 +157,7 @@ func main() {
 	signalchan := make(chan os.Signal, 1)
 	signal.Notify(signalchan, syscall.SIGTERM)
 
-	udpListener(destinations)
+	dataCh := make(chan []byte, 1000)
+	go udpListener(dataCh)
+	processData(dataCh, destinations)
 }

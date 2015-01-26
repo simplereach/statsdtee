@@ -154,6 +154,8 @@ func main() {
 		log.Fatalf("must specify at least one --destination-address")
 	}
 
+	runtime.GOMAXPROCS(2)
+
 	signalchan := make(chan os.Signal, 1)
 	signal.Notify(signalchan, syscall.SIGTERM)
 
